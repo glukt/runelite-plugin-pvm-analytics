@@ -1,0 +1,34 @@
+{
+  "AMULET": [
+    {
+      "itemId": 1731,
+      "itemName": "Amulet of Power",
+      "nextUpgrades": [
+        {
+          "itemId": 1712,
+          "itemName": "Amulet of Glory",
+          "sourceType": "SKILLING",
+          "sourceName": "Crafting",
+          "requirements": [
+            { "type": "SKILL", "name": "CRAFTING", "level": 50 }
+          ]
+        }
+      ]
+    },
+    {
+      "itemId": 1712,
+      "itemName": "Amulet of Glory",
+      "nextUpgrades": [
+        {
+          "itemId": 6585,
+          "itemName": "Amulet of Fury",
+          "sourceType": "SKILLING",
+          "sourceName": "Crafting",
+          "requirements": [
+            { "type": "SKILL", "name": "CRAFTING", "level": 80 }
+          ]
+        }
+      ]
+    }
+  ]
+}
