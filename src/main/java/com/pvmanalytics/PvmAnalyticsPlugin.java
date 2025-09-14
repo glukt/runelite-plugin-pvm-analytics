@@ -1,16 +1,17 @@
 package com.pvmanalytics;
 
-import com.google.common.collect.ImmutableSet;
 import com.google.inject.Provides;
-import java.util.Set;
 import javax.inject.Inject;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
-import net.runelite.api.events.GameTick;
+import net.runelite.api.GameState;
+import net.runelite.api.events.GameStateChanged;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
+
+import java.util.Arrays;
 
 @Slf4j
 @PluginDescriptor(
@@ -18,17 +19,15 @@ import net.runelite.client.plugins.PluginDescriptor;
 )
 public class PvmAnalyticsPlugin extends Plugin
 {
-    // A "Set" is a collection that holds unique values. We use it here to store all the valid Gauntlet region IDs.
-    private static final Set<Integer> GAUNTLET_REGION_IDS = ImmutableSet.of(7512, 7768);
-
     @Inject
     private Client client;
 
     @Inject
     private PvmAnalyticsConfig config;
 
-    // This variable will act as our memory, remembering if we are currently inside the instance.
-    private boolean isInGauntletInstance = false;
+    private static final int GAUNTLET_LOBBY_REGION_ID = 12127;
+    private static final int CORRUPTED_GAUNTLET_LOBBY_REGION_ID = 7512; // Example ID, adjust if needed
+    private boolean inGauntletLobby = false;
 
     @Override
     protected void startUp() throws Exception
@@ -43,33 +42,34 @@ public class PvmAnalyticsPlugin extends Plugin
     }
 
     @Subscribe
-    public void onGameTick(GameTick gameTick)
+    public void onGameStateChanged(GameStateChanged gameStateChanged)
     {
-        // First, get the player's current location and find the region ID.
-        int currentRegionId = client.getLocalPlayer().getWorldLocation().getRegionID();
-
-        // Check if the player's current region ID is contained within our Set of Gauntlet IDs.
-        if (GAUNTLET_REGION_IDS.contains(currentRegionId))
+        if (gameStateChanged.getGameState() != GameState.LOGGED_IN)
         {
-            // If they are in the region, but our plugin doesn't know it yet, it means they have just entered.
-            if (!isInGauntletInstance)
-            {
-                log.info("Gauntlet trip started!");
-                // We update our state to remember that we are now inside.
-                isInGauntletInstance = true;
-            }
+            return;
         }
-        else
+
+        boolean isInGauntletRegion = isPlayerInGauntletLobby();
+
+        if (isInGauntletRegion && !inGauntletLobby)
         {
-            // If the player is not in a Gauntlet region, but our plugin thinks they are, it means they have just left.
-            if (isInGauntletInstance)
-            {
-                log.info("Gauntlet trip ended!");
-                // We update our state to remember that we are now outside.
-                isInGauntletInstance = false;
-            }
+            log.info("Gauntlet trip started!");
+            inGauntletLobby = true;
+        }
+        else if (!isInGauntletRegion && inGauntletLobby)
+        {
+            log.info("Gauntlet trip ended!");
+            inGauntletLobby = false;
         }
     }
+
+    private boolean isPlayerInGauntletLobby()
+    {
+        int[] mapRegions = client.getMapRegions();
+        return Arrays.stream(mapRegions).anyMatch(id ->
+                id == GAUNTLET_LOBBY_REGION_ID || id == CORRUPTED_GAUNTLET_LOBBY_REGION_ID);
+    }
+
 
     @Provides
     PvmAnalyticsConfig provideConfig(ConfigManager configManager)
