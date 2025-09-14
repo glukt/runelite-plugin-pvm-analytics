@@ -1,6 +1,8 @@
 package com.upgradefinder;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.inject.Provides;
 import java.io.InputStream;
@@ -8,9 +10,10 @@ import java.io.InputStreamReader;
 import javax.inject.Inject;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
-import net.runelite.api.Item;
+import net.runelite.api.GameState;
 import net.runelite.api.MenuAction;
 import net.runelite.api.MenuEntry;
+import net.runelite.api.Skill;
 import net.runelite.api.events.ClientTick;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
@@ -18,7 +21,7 @@ import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.ui.overlay.tooltip.Tooltip;
 import net.runelite.client.ui.overlay.tooltip.TooltipManager;
-import net.runelite.client.util.Text;
+import net.runelite.client.util.ColorUtil;
 
 @Slf4j
 @PluginDescriptor(
@@ -65,24 +68,60 @@ public class UpgradeFinderPlugin extends Plugin {
         }
 
         MenuEntry lastEntry = menuEntries[menuEntries.length - 1];
-        if (lastEntry.getType() != MenuAction.ITEM_ON_WIDGET || !lastEntry.getOption().equals("Examine")) {
+        if (lastEntry.getOpcode() != MenuAction.ITEM_EXAMINE.getId())
+        {
             return;
         }
 
-        // We have a hovered item, now let's show our tooltip
         showUpgradeTooltip(lastEntry.getItemId());
     }
 
     private void showUpgradeTooltip(int itemId) {
-        // Here you will look up the item in your progression database
-        // and build the tooltip string. This is a simplified example.
-        // In a real implementation, you would parse the JSON and check
-        // the player's stats and quest progress.
+        if (progressionDatabase == null) {
+            return;
+        }
 
-        String tooltipText = "Upgrade information for item: " + itemId; // Placeholder
+        // We will improve this later to handle all slots
+        JsonArray amuletUpgrades = progressionDatabase.getAsJsonArray("AMULET");
+        if (amuletUpgrades == null) {
+            return;
+        }
 
-        tooltipManager.add(new Tooltip(tooltipText));
+        for (JsonElement itemElement : amuletUpgrades) {
+            JsonObject itemObject = itemElement.getAsJsonObject();
+            if (itemObject.get("itemId").getAsInt() == itemId) {
+                // We've found the hovered item in our database
+                StringBuilder tooltipText = new StringBuilder();
+                tooltipText.append(ColorUtil.wrapWithColorTag("Next Upgrade:", java.awt.Color.YELLOW));
+
+                JsonArray nextUpgrades = itemObject.getAsJsonArray("nextUpgrades");
+                for (JsonElement upgradeElement : nextUpgrades) {
+                    JsonObject upgradeObject = upgradeElement.getAsJsonObject();
+                    tooltipText.append("<br>").append(upgradeObject.get("itemName").getAsString());
+
+                    JsonArray requirements = upgradeObject.getAsJsonArray("requirements");
+                    for (JsonElement reqElement : requirements) {
+                        JsonObject reqObject = reqElement.getAsJsonObject();
+                        String type = reqObject.get("type").getAsString();
+
+                        if ("SKILL".equals(type)) {
+                            String skillName = reqObject.get("name").getAsString();
+                            int requiredLevel = reqObject.get("level").getAsInt();
+                            int currentLevel = client.getRealSkillLevel(Skill.valueOf(skillName));
+
+                            java.awt.Color color = currentLevel >= requiredLevel ? java.awt.Color.GREEN : java.awt.Color.RED;
+                            tooltipText.append("<br>  └ ")
+                                    .append(ColorUtil.wrapWithColorTag(requiredLevel + " " + skillName, color));
+                        }
+                        // We will add more requirement types (QUEST, etc.) here later
+                    }
+                }
+                tooltipManager.add(new Tooltip(tooltipText.toString()));
+                return;
+            }
+        }
     }
+
 
     @Provides
     UpgradeFinderConfig provideConfig(ConfigManager configManager) {
