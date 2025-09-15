@@ -29,6 +29,21 @@
           ]
         }
       ]
+    },
+    {
+      "itemId": 1710,
+      "itemName": "Amulet of Glory(3)",
+      "nextUpgrades": [
+        {
+          "itemId": 6585,
+          "itemName": "Amulet of Fury",
+          "sourceType": "SKILLING",
+          "sourceName": "Crafting",
+          "requirements": [
+            { "type": "SKILL", "name": "CRAFTING", "level": 80 }
+          ]
+        }
+      ]
     }
   ]
 }

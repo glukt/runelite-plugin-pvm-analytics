@@ -14,20 +14,23 @@ import net.runelite.api.GameState;
 import net.runelite.api.MenuAction;
 import net.runelite.api.MenuEntry;
 import net.runelite.api.Skill;
-import net.runelite.api.events.ClientTick;
+import net.runelite.api.ChatMessageType;
+import net.runelite.api.events.MenuEntryAdded;
+import net.runelite.api.events.MenuOptionClicked;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
-import net.runelite.client.ui.overlay.tooltip.Tooltip;
-import net.runelite.client.ui.overlay.tooltip.TooltipManager;
 import net.runelite.client.util.ColorUtil;
+import net.runelite.client.util.Text;
 
 @Slf4j
 @PluginDescriptor(
         name = "Upgrade Finder"
 )
-public class UpgradeFinderPlugin extends Plugin {
+public class UpgradeFinderPlugin extends Plugin
+{
+    private static final String UPGRADE_FINDER_ACTION = "Check Upgrades";
 
     @Inject
     private Client client;
@@ -36,95 +39,116 @@ public class UpgradeFinderPlugin extends Plugin {
     private UpgradeFinderConfig config;
 
     @Inject
-    private TooltipManager tooltipManager;
-
-    @Inject
     private Gson gson;
 
     private JsonObject progressionDatabase;
 
     @Override
-    protected void startUp() throws Exception {
+    protected void startUp() throws Exception
+    {
         loadProgressionDatabase();
     }
 
-    private void loadProgressionDatabase() {
-        try (InputStream in = getClass().getResourceAsStream("/progression_database.json")) {
+    private void loadProgressionDatabase()
+    {
+        try (InputStream in = getClass().getResourceAsStream("/progression_database.json"))
+        {
             progressionDatabase = gson.fromJson(new InputStreamReader(in), JsonObject.class);
-        } catch (Exception e) {
+        }
+        catch (Exception e)
+        {
             log.error("Error loading progression database", e);
         }
     }
 
     @Subscribe
-    public void onClientTick(ClientTick clientTick) {
-        if (!config.enablePlugin() || client.isMenuOpen() || !config.modifierKey().isPressed()) {
-            return;
+    public void onMenuEntryAdded(MenuEntryAdded event)
+    {
+        // This event fires every time a new option is added to the right-click menu.
+        // We check if the option is an item in the inventory or equipment screen.
+        final String option = Text.removeTags(event.getOption()).toLowerCase();
+        if (option.contains("wear") || option.contains("wield") || option.contains("remove"))
+        {
+            client.createMenuEntry(-1)
+                    .setOption(UPGRADE_FINDER_ACTION)
+                    .setTarget(event.getTarget())
+                    .setType(MenuAction.RUNELITE)
+                    .setIdentifier(event.getIdentifier());
         }
+    }
 
-        MenuEntry[] menuEntries = client.getMenuEntries();
-        if (menuEntries.length == 0) {
-            return;
+    @Subscribe
+    public void onMenuOptionClicked(MenuOptionClicked event)
+    {
+        // This event fires when a menu option is clicked.
+        // We check if it's our custom option.
+        if (event.getMenuOption().equals(UPGRADE_FINDER_ACTION))
+        {
+            // The item ID is stored in the identifier field for item options.
+            int itemId = event.getId();
+            showUpgradeInfoInChat(itemId);
         }
+    }
 
-        MenuEntry lastEntry = menuEntries[menuEntries.length - 1];
-        if (lastEntry.getOpcode() != MenuAction.ITEM_EXAMINE.getId())
+    private void showUpgradeInfoInChat(int itemId)
+    {
+        if (progressionDatabase == null)
         {
             return;
         }
 
-        showUpgradeTooltip(lastEntry.getItemId());
-    }
-
-    private void showUpgradeTooltip(int itemId) {
-        if (progressionDatabase == null) {
-            return;
-        }
-
-        // We will improve this later to handle all slots
         JsonArray amuletUpgrades = progressionDatabase.getAsJsonArray("AMULET");
-        if (amuletUpgrades == null) {
+        if (amuletUpgrades == null)
+        {
             return;
         }
 
-        for (JsonElement itemElement : amuletUpgrades) {
+        for (JsonElement itemElement : amuletUpgrades)
+        {
             JsonObject itemObject = itemElement.getAsJsonObject();
-            if (itemObject.get("itemId").getAsInt() == itemId) {
-                // We've found the hovered item in our database
-                StringBuilder tooltipText = new StringBuilder();
-                tooltipText.append(ColorUtil.wrapWithColorTag("Next Upgrade:", java.awt.Color.YELLOW));
+            if (itemObject.get("itemId").getAsInt() == itemId)
+            {
+                StringBuilder chatMessage = new StringBuilder();
+                chatMessage.append("Upgrade Path for ").append(itemObject.get("itemName").getAsString()).append(":");
 
                 JsonArray nextUpgrades = itemObject.getAsJsonArray("nextUpgrades");
-                for (JsonElement upgradeElement : nextUpgrades) {
+                for (JsonElement upgradeElement : nextUpgrades)
+                {
                     JsonObject upgradeObject = upgradeElement.getAsJsonObject();
-                    tooltipText.append("<br>").append(upgradeObject.get("itemName").getAsString());
+                    chatMessage.append("<br>→ ").append(upgradeObject.get("itemName").getAsString());
 
                     JsonArray requirements = upgradeObject.getAsJsonArray("requirements");
-                    for (JsonElement reqElement : requirements) {
+                    for (JsonElement reqElement : requirements)
+                    {
                         JsonObject reqObject = reqElement.getAsJsonObject();
                         String type = reqObject.get("type").getAsString();
 
-                        if ("SKILL".equals(type)) {
+                        if ("SKILL".equals(type))
+                        {
                             String skillName = reqObject.get("name").getAsString();
                             int requiredLevel = reqObject.get("level").getAsInt();
                             int currentLevel = client.getRealSkillLevel(Skill.valueOf(skillName));
 
-                            java.awt.Color color = currentLevel >= requiredLevel ? java.awt.Color.GREEN : java.awt.Color.RED;
-                            tooltipText.append("<br>  └ ")
-                                    .append(ColorUtil.wrapWithColorTag(requiredLevel + " " + skillName, color));
+                            String colorHex = currentLevel >= requiredLevel ? "00ff00" : "ff0000"; // Green or Red
+                            chatMessage.append("<br>  └ ")
+                                    .append("<col=").append(colorHex).append(">")
+                                    .append(requiredLevel).append(" ").append(skillName)
+                                    .append("</col>");
                         }
-                        // We will add more requirement types (QUEST, etc.) here later
                     }
                 }
-                tooltipManager.add(new Tooltip(tooltipText.toString()));
+
+                client.addChatMessage(ChatMessageType.GAMEMESSAGE, "", chatMessage.toString(), null);
                 return;
             }
         }
+        client.addChatMessage(ChatMessageType.GAMEMESSAGE, "", "No upgrade path found for this item.", null);
     }
 
 
     @Provides
-    UpgradeFinderConfig provideConfig(ConfigManager configManager) {
+    UpgradeFinderConfig provideConfig(ConfigManager configManager)
+    {
         return configManager.getConfig(UpgradeFinderConfig.class);
     }
 }
