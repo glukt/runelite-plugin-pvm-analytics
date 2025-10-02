@@ -1,34 +1,28 @@
 package com.upgradefinder;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.inject.Provides;
-import java.awt.Color;
-import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import javax.inject.Inject;
 import lombok.extern.slf4j.Slf4j;
-import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
+import net.runelite.api.GameState;
 import net.runelite.api.MenuAction;
+import net.runelite.api.MenuEntry;
+import net.runelite.api.Skill;
+import net.runelite.api.ChatMessageType;
 import net.runelite.api.events.MenuEntryAdded;
 import net.runelite.api.events.MenuOptionClicked;
-import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.util.ColorUtil;
 import net.runelite.client.util.Text;
-import okhttp3.Call;
-import okhttp3.Callback;
-import okhttp3.HttpUrl;
-import okhttp3.OkHttpClient;
-import okhttp3.Request;
-import okhttp3.Response;
-import org.jsoup.Jsoup;
-import org.jsoup.nodes.Document;
-import org.jsoup.nodes.Element;
-import org.jsoup.select.Elements;
 
 @Slf4j
 @PluginDescriptor(
@@ -47,21 +41,31 @@ public class UpgradeFinderPlugin extends Plugin
     @Inject
     private Gson gson;
 
-    @Inject
-    private OkHttpClient okHttpClient;
-
-    @Inject
-    private ClientThread clientThread;
+    private JsonObject progressionDatabase;
 
     @Override
     protected void startUp() throws Exception
     {
-        log.info("Upgrade Finder started!");
+        loadProgressionDatabase();
+    }
+
+    private void loadProgressionDatabase()
+    {
+        try (InputStream in = getClass().getResourceAsStream("/progression_database.json"))
+        {
+            progressionDatabase = gson.fromJson(new InputStreamReader(in), JsonObject.class);
+        }
+        catch (Exception e)
+        {
+            log.error("Error loading progression database", e);
+        }
     }
 
     @Subscribe
     public void onMenuEntryAdded(MenuEntryAdded event)
     {
+        // This event fires every time a new option is added to the right-click menu.
+        // We check if the option is an item in the inventory or equipment screen.
         final String option = Text.removeTags(event.getOption()).toLowerCase();
         if (option.contains("wear") || option.contains("wield") || option.contains("remove"))
         {
@@ -76,143 +80,71 @@ public class UpgradeFinderPlugin extends Plugin
     @Subscribe
     public void onMenuOptionClicked(MenuOptionClicked event)
     {
+        // This event fires when a menu option is clicked.
+        // We check if it's our custom option.
         if (event.getMenuOption().equals(UPGRADE_FINDER_ACTION))
         {
+            // The item ID is stored in the identifier field for item options.
             int itemId = event.getId();
-            String itemName = client.getItemDefinition(itemId).getName();
-            fetchUpgradeInfoFromWiki(itemName);
+            showUpgradeInfoInChat(itemId);
         }
     }
 
-    private void fetchUpgradeInfoFromWiki(String itemName)
+    private void showUpgradeInfoInChat(int itemId)
     {
-        sendChatMessage("Looking up upgrade path for " + itemName + "...");
-
-        HttpUrl url = new HttpUrl.Builder()
-                .scheme("https")
-                .host("oldschool.runescape.wiki")
-                .addPathSegment("api.php")
-                .addQueryParameter("action", "parse")
-                .addQueryParameter("page", "Jewellery")
-                .addQueryParameter("prop", "text")
-                .addQueryParameter("format", "json")
-                .build();
-
-        Request request = new Request.Builder().url(url).build();
-
-        okHttpClient.newCall(request).enqueue(new Callback()
+        if (progressionDatabase == null)
         {
-            @Override
-            public void onFailure(Call call, IOException e)
-            {
-                log.error("Failed to fetch upgrade info from wiki", e);
-                clientThread.invokeLater(() -> sendChatMessage("Error looking up upgrade path."));
-            }
-
-            @Override
-            public void onResponse(Call call, Response response) throws IOException
-            {
-                if (!response.isSuccessful())
-                {
-                    log.error("Unexpected code " + response);
-                    clientThread.invokeLater(() -> sendChatMessage("Error looking up upgrade path: " + response.message()));
-                    response.close();
-                    return;
-                }
-
-                try (response)
-                {
-                    final String jsonResponse = response.body().string();
-                    clientThread.invokeLater(() -> {
-                        try
-                        {
-                            JsonObject json = gson.fromJson(jsonResponse, JsonObject.class);
-                            String htmlContent = json.getAsJsonObject("parse").getAsJsonObject("text").get("*").getAsString();
-                            Document doc = Jsoup.parse(htmlContent);
-
-                            parseAmuletTable(doc, itemName);
-                        }
-                        catch (Exception e)
-                        {
-                            log.error("Error parsing wiki response", e);
-                            sendChatMessage("Failed to parse wiki response.");
-                        }
-                    });
-                }
-            }
-        });
-    }
-
-    private void parseAmuletTable(Document doc, String currentItemName)
-    {
-        Element amuletHeader = doc.select("h2:has(span#Amulets)").first();
-        if (amuletHeader == null)
-        {
-            sendChatMessage("Could not find the Amulets section on the wiki page.");
             return;
         }
 
-        Element amuletTable = amuletHeader.nextElementSibling();
-        if (amuletTable == null || !amuletTable.tagName().equals("table"))
+        JsonArray amuletUpgrades = progressionDatabase.getAsJsonArray("AMULET");
+        if (amuletUpgrades == null)
         {
-            sendChatMessage("Could not find the Amulets table.");
             return;
         }
 
-        Elements rows = amuletTable.select("tr");
-        boolean foundCurrentItem = false;
-
-        // Handle charged glory case by normalizing the name
-        String normalizedCurrentItemName = currentItemName;
-        if (normalizedCurrentItemName.toLowerCase().startsWith("amulet of glory"))
+        for (JsonElement itemElement : amuletUpgrades)
         {
-            normalizedCurrentItemName = "Amulet of glory";
-        }
-
-
-        for (Element row : rows)
-        {
-            Elements cells = row.select("td");
-            if (cells.size() > 1)
+            JsonObject itemObject = itemElement.getAsJsonObject();
+            if (itemObject.get("itemId").getAsInt() == itemId)
             {
-                String itemNameInRow = cells.get(0).text();
+                StringBuilder chatMessage = new StringBuilder();
+                chatMessage.append("Upgrade Path for ").append(itemObject.get("itemName").getAsString()).append(":");
 
-                if (foundCurrentItem)
+                JsonArray nextUpgrades = itemObject.getAsJsonArray("nextUpgrades");
+                for (JsonElement upgradeElement : nextUpgrades)
                 {
-                    // Look for the next item that has a clear crafting or quest requirement
-                    String requirements = cells.get(1).text();
-                    if (requirements.toLowerCase().contains("crafting") || requirements.toLowerCase().contains("quest"))
+                    JsonObject upgradeObject = upgradeElement.getAsJsonObject();
+                    chatMessage.append("<br>→ ").append(upgradeObject.get("itemName").getAsString());
+
+                    JsonArray requirements = upgradeObject.getAsJsonArray("requirements");
+                    for (JsonElement reqElement : requirements)
                     {
-                        String upgradeName = cells.get(0).text();
-                        sendChatMessage("Next upgrade for " + ColorUtil.wrapWithColorTag(currentItemName, Color.YELLOW)
-                                + " is " + ColorUtil.wrapWithColorTag(upgradeName, Color.GREEN)
-                                + ". Requirements: " + requirements);
-                        return;
+                        JsonObject reqObject = reqElement.getAsJsonObject();
+                        String type = reqObject.get("type").getAsString();
+
+                        if ("SKILL".equals(type))
+                        {
+                            String skillName = reqObject.get("name").getAsString();
+                            int requiredLevel = reqObject.get("level").getAsInt();
+                            int currentLevel = client.getRealSkillLevel(Skill.valueOf(skillName));
+
+                            String colorHex = currentLevel >= requiredLevel ? "00ff00" : "ff0000"; // Green or Red
+                            chatMessage.append("<br>  └ ")
+                                    .append("<col=").append(colorHex).append(">")
+                                    .append(requiredLevel).append(" ").append(skillName)
+                                    .append("</col>");
+                        }
                     }
                 }
 
-                if (itemNameInRow.equalsIgnoreCase(normalizedCurrentItemName))
-                {
-                    foundCurrentItem = true;
-                }
+                client.addChatMessage(ChatMessageType.GAMEMESSAGE, "", chatMessage.toString(), null);
+                return;
             }
         }
-
-        if (foundCurrentItem)
-        {
-            sendChatMessage("This appears to be the final upgrade in its path.");
-        }
-        else
-        {
-            sendChatMessage("No upgrade path found for this item in the Jewellery wiki table.");
-        }
+        client.addChatMessage(ChatMessageType.GAMEMESSAGE, "", "No upgrade path found for this item.", null);
     }
 
-
-    private void sendChatMessage(String message)
-    {
-        client.addChatMessage(ChatMessageType.GAMEMESSAGE, "", message, null);
-    }
 
     @Provides
     UpgradeFinderConfig provideConfig(ConfigManager configManager)
